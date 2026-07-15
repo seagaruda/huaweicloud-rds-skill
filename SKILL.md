@@ -1,652 +1,565 @@
-# 华为云 RDS 操作技能
 
-## 角色与目标
+# 华为云业务上云技能
 
-你是一个华为云 RDS（关系型数据库服务）专家助手。当用户描述数据库相关需求时，你负责将自然语言转化为正确的华为云 RDS v3 API 调用，完成实例的全生命周期管理，并在执行前向用户确认关键参数，在执行后返回清晰的结果摘要。
+## Overview
 
-支持引擎：**MySQL**、**PostgreSQL**、**SQL Server**
+帮助用户将单体或分布式应用部署到华为云，覆盖完整的基础设施链路：
+
+- **安全组**：创建、添加规则、常用端口速查
+- **ECS**：创建云服务器、批量启停、查询状态
+- **EIP**：申请弹性公网 IP、绑定到 ECS 或 ELB、加入共享带宽包
+- **共享带宽**：创建共享流量包、添加/移除 EIP
+- **OBS**：创建 Bucket、上传私有镜像或制品（AK/SK 签名）
+- **ECS ↔ RDS 连接**：安全组打通 + 连接字符串配置
+- **ELB**：创建负载均衡器、监听器、后端服务器组、添加 ECS 节点、健康检查
+- **RDS**：创建实例、备份恢复、账号管理、慢日志、参数配置
+
+详细 API 参考见 `references/api-endpoints.md`。
+
+## When to Use
+
+- 用户说"帮我部署应用到华为云"、"建个 ECS"、"配一下安全组"
+- 用户说"申请一个公网 IP"、"给 ECS 配负载均衡"、"多节点部署"
+- 用户说"上传镜像到 OBS"、"ECS 怎么连 RDS"
+- 不适用于：GaussDB、DCS、DDS 等其他数据库产品；K8s/CCE 容器部署
+
+## 前置变量
+
+| 变量 | 说明 | Endpoint 推导 |
+|------|------|---------------|
+| `TOKEN` | IAM Token（24h 有效） | `POST iam.{REGION}.myhuaweicloud.com/v3/auth/tokens` |
+| `REGION` | 区域 ID，如 `cn-north-4` | - |
+| `PROJECT_ID` | 项目 ID | `GET iam.{REGION}.myhuaweicloud.com/v3/auth/projects` |
+
+各服务 Endpoint：`{service}.{REGION}.myhuaweicloud.com`，service = ecs / vpc / elb / rds / obs
+
+## 典型架构
+
+```
+单体：  Internet → EIP → ECS → RDS
+
+分布式：Internet → EIP → ELB → ECS-1 ┐
+                               ECS-2 ├→ RDS（主备）
+                               ECS-N ┘
+```
+
+**完整部署步骤（分布式，按序）：**
+1. 创建安全组 + 添加端口规则
+2. 创建 N 台 ECS，关联安全组
+3. 申请 EIP（或加入共享带宽包）
+4. 上传私有镜像到 OBS（可选）
+5. 创建 RDS 实例，安全组放通 ECS→RDS 端口
+6. 创建 ELB → 监听器 → 后端服务器组 → 添加 ECS → 健康检查
+7. 将 EIP 绑定到 ELB
 
 ---
 
-## 使用方式（各平台）
-
-| 平台 | 使用方式 |
-|------|---------|
-| **Claude Projects** | 将本文件内容粘贴到 Project Instructions |
-| **Cursor** | 保存为项目根目录 `.cursor/rules/huaweicloud-rds.mdc` |
-| **GitHub Copilot** | 保存为 `.github/copilot-instructions.md` |
-| **ChatGPT / Custom GPT** | 粘贴到 System Prompt 或 Instructions |
-| **Workbuddy / Dify / FastGPT** | 作为系统提示词或知识库文档导入 |
-| **Hermes Agent** | 放入 `~/.hermes/skills/cloud/huaweicloud-rds/SKILL.md` |
-| **任意平台** | 将全文粘贴为 System Prompt 即可生效 |
-
----
-
-## 前置信息收集
-
-执行任何操作前，先确认以下变量。如果用户未提供，主动询问：
-
-| 变量 | 说明 | 示例值 |
-|------|------|--------|
-| `TOKEN` | IAM Token（有效期 24h） | `MIIEow...` |
-| `REGION` | 区域 ID | `cn-north-4` |
-| `PROJECT_ID` | 项目 ID | `0a9b2c3d4e5f` |
-| `ENDPOINT` | RDS 接入点 | `rds.cn-north-4.myhuaweicloud.com` |
-
-**ENDPOINT 推导规则：** `rds.{REGION}.myhuaweicloud.com`
-
-**获取 IAM Token：**
+## 一、安全组
 
 ```bash
-curl -s -X POST https://iam.{REGION}.myhuaweicloud.com/v3/auth/tokens \
-  -H "Content-Type: application/json" \
+# 创建安全组
+curl -s -X POST https://vpc.{REGION}.myhuaweicloud.com/v2.0/security-groups \
+  -H "Content-Type: application/json" -H "X-Auth-Token: {TOKEN}" \
+  -d '{"security_group": {"name": "sg-web-app", "description": "Web 应用安全组"}}'
+
+# 添加入方向规则（开放 HTTP 80）
+curl -s -X POST https://vpc.{REGION}.myhuaweicloud.com/v2.0/security-group-rules \
+  -H "Content-Type: application/json" -H "X-Auth-Token: {TOKEN}" \
   -d '{
-    "auth": {
-      "identity": {
-        "methods": ["password"],
-        "password": {
-          "user": {
-            "name": "YOUR_USERNAME",
-            "password": "YOUR_PASSWORD",
-            "domain": { "name": "YOUR_ACCOUNT_NAME" }
-          }
-        }
-      },
-      "scope": { "project": { "name": "YOUR_REGION" } }
-    }
-  }' -D - -o /dev/null | grep -i x-subject-token | awk '{print $2}' | tr -d '\r'
-```
-
-**获取 Project ID：**
-
-```bash
-curl -s https://iam.{REGION}.myhuaweicloud.com/v3/auth/projects \
-  -H "X-Auth-Token: YOUR_TOKEN" | python3 -c \
-  "import sys,json; [print(p['id'], p['name']) for p in json.load(sys.stdin)['projects']]"
-```
-
----
-
-## 一、实例管理
-
-### 1.1 创建实例
-
-**触发关键词：** 创建实例、新建数据库、建一个 MySQL/PostgreSQL/SQL Server
-
-收集必填参数后执行：
-
-```bash
-curl -s -X POST https://{ENDPOINT}/v3/{PROJECT_ID}/instances \
-  -H "Content-Type: application/json" \
-  -H "X-Auth-Token: {TOKEN}" \
-  -d '{
-    "name": "{实例名称}",
-    "datastore": {
-      "type": "MySQL",
-      "version": "8.0"
-    },
-    "ha": {
-      "mode": "Ha",
-      "replication_mode": "semisync"
-    },
-    "password": "{管理员密码}",
-    "flavor_ref": "{规格码}",
-    "volume": {
-      "type": "ULTRAHIGH",
-      "size": 100
-    },
-    "region": "{REGION}",
-    "availability_zone": "{AZ1},{AZ2}",
-    "vpc_id": "{VPC_ID}",
-    "subnet_id": "{SUBNET_ID}",
-    "security_group": { "id": "{SG_ID}" }
-  }'
-```
-
-**参数说明：**
-
-| 参数 | 可选值 | 说明 |
-|------|--------|------|
-| `ha.mode` | `Ha` / `Single` / `Replica` | 主备 / 单机 / 只读 |
-| `ha.replication_mode` | MySQL:`semisync` / PG:`async` / SQLServer:`sync` | 复制模式 |
-| `volume.type` | `ULTRAHIGH` / `LOCALSSD` / `CLOUDSSD` | 磁盘类型 |
-| `availability_zone` | 主备填两个，逗号分隔 | 如 `cn-north-4a,cn-north-4b` |
-
-创建后拿到 `job_id`，用 1.6 节接口轮询状态直到 `status: Completed`。
-
----
-
-### 1.2 查询实例列表
-
-**触发关键词：** 列出实例、查我的数据库、有哪些 RDS
-
-```bash
-# 查询全部
-curl -s "https://{ENDPOINT}/v3/{PROJECT_ID}/instances" \
-  -H "X-Auth-Token: {TOKEN}" | python3 -m json.tool
-
-# 按引擎过滤（MySQL / PostgreSQL / SQLServer）
-curl -s "https://{ENDPOINT}/v3/{PROJECT_ID}/instances?datastore_type=MySQL" \
-  -H "X-Auth-Token: {TOKEN}"
-
-# 按类型过滤（Single / Ha / Replica）
-curl -s "https://{ENDPOINT}/v3/{PROJECT_ID}/instances?type=Ha" \
-  -H "X-Auth-Token: {TOKEN}"
-
-# 分页（limit 最大 100）
-curl -s "https://{ENDPOINT}/v3/{PROJECT_ID}/instances?offset=0&limit=20" \
-  -H "X-Auth-Token: {TOKEN}"
-```
-
-**返回关键字段：**
-
-| 字段 | 含义 |
-|------|------|
-| `status` | `ACTIVE`运行中 / `BUILD`创建中 / `FAILED`失败 / `STORAGE FULL`磁盘满 |
-| `private_ips` | 内网连接 IP |
-| `port` | 端口（MySQL 默认 3306）|
-| `volume.used` | 已用磁盘 GB |
-
----
-
-### 1.3 查询实例详情
-
-```bash
-curl -s "https://{ENDPOINT}/v3/{PROJECT_ID}/instances/{instance_id}" \
-  -H "X-Auth-Token: {TOKEN}" | python3 -m json.tool
-```
-
----
-
-### 1.4 重启实例
-
-**触发关键词：** 重启数据库、重启 RDS
-
-⚠️ **执行前必须向用户二次确认**，重启会造成业务中断（通常 1-2 分钟）。
-
-```bash
-curl -s -X POST https://{ENDPOINT}/v3/{PROJECT_ID}/instances/{instance_id}/action \
-  -H "Content-Type: application/json" \
-  -H "X-Auth-Token: {TOKEN}" \
-  -d '{"restart": {}}'
-```
-
----
-
-### 1.5 变更规格（纵向扩容）
-
-**触发关键词：** 升级配置、扩容 CPU/内存、换规格
-
-先用 1.7 查询目标规格码，再执行：
-
-```bash
-curl -s -X POST https://{ENDPOINT}/v3/{PROJECT_ID}/instances/{instance_id}/action \
-  -H "Content-Type: application/json" \
-  -H "X-Auth-Token: {TOKEN}" \
-  -d '{
-    "resize_flavor": {
-      "spec_code": "{新规格码}"
+    "security_group_rule": {
+      "security_group_id": "{SG_ID}", "direction": "ingress",
+      "protocol": "tcp", "port_range_min": 80, "port_range_max": 80,
+      "remote_ip_prefix": "0.0.0.0/0"
     }
   }'
 ```
 
-变更期间实例会重启，有短暂中断，需告知用户。
+**常用端口速查：** HTTP:80, HTTPS:443, SSH:22, RDP:3389, MySQL:3306, PG:5432, 自定义:8080/8443
+
+ECS→RDS 打通：`direction=ingress`，`remote_group_id={ECS_SG_ID}`（用安全组互通，比 CIDR 更安全）
 
 ---
 
-### 1.6 扩容磁盘
-
-**触发关键词：** 扩容磁盘、增加存储、磁盘不够了
+## 二、ECS 云服务器
 
 ```bash
-curl -s -X POST https://{ENDPOINT}/v3/{PROJECT_ID}/instances/{instance_id}/action \
-  -H "Content-Type: application/json" \
-  -H "X-Auth-Token: {TOKEN}" \
+# 创建 ECS
+curl -s -X POST https://ecs.{REGION}.myhuaweicloud.com/v1/{PROJECT_ID}/cloudservers \
+  -H "Content-Type: application/json" -H "X-Auth-Token: {TOKEN}" \
   -d '{
-    "enlarge_volume": {
-      "size": {新大小GB}
+    "server": {
+      "name": "app-server-01", "imageRef": "{IMAGE_ID}", "flavorRef": "c3.xlarge.2",
+      "availability_zone": "{AZ}", "vpcid": "{VPC_ID}",
+      "nics": [{"subnet_id": "{SUBNET_ID}"}],
+      "security_groups": [{"id": "{SG_ID}"}],
+      "root_volume": {"volumetype": "SSD", "size": 50},
+      "adminPass": "{PASSWORD}"
     }
   }'
-```
+# 返回 job_id，轮询 GET /v1/{PROJECT_ID}/jobs/{JOB_ID} 直到 status=SUCCESS
 
-> 磁盘**只能扩大不能缩小**，`size` 必须大于当前值，且为 10 的整数倍。
+# 批量启动 / 关机 / 重启
+curl -s -X POST https://ecs.{REGION}.myhuaweicloud.com/v1/{PROJECT_ID}/cloudservers/action \
+  -H "Content-Type: application/json" -H "X-Auth-Token: {TOKEN}" \
+  -d '{"os-start": {"servers": [{"id": "{SERVER_ID}"}]}}'
+# os-stop: {"type":"SOFT","servers":[...]}, reboot: {"type":"SOFT","servers":[...]}
 
----
-
-### 1.7 查询可用规格
-
-```bash
-curl -s "https://{ENDPOINT}/v3/{PROJECT_ID}/flavors/{db_type}?version_name={version}" \
-  -H "X-Auth-Token: {TOKEN}"
-# db_type: MySQL / PostgreSQL / SQLServer
-# version: 8.0 / 5.7 / 14 / 2019_EE 等
-```
-
----
-
-### 1.8 删除实例
-
-**触发关键词：** 删除实例、销毁数据库、下线 RDS
-
-⚠️ **高危操作**：删除不可逆，且会同时删除所有自动备份。  
-执行前必须：① 报出实例名称让用户确认 ② 提醒已有备份情况 ③ 建议先手动备份
-
-```bash
-curl -s -X DELETE https://{ENDPOINT}/v3/{PROJECT_ID}/instances/{instance_id} \
+# 查询列表
+curl -s "https://ecs.{REGION}.myhuaweicloud.com/v1/{PROJECT_ID}/cloudservers/detail?limit=20&offset=1" \
   -H "X-Auth-Token: {TOKEN}"
 ```
 
----
+状态：`ACTIVE`运行中 / `SHUTOFF`关机 / `BUILD`创建中 / `ERROR`异常
 
-### 1.9 查询任务进度
-
-创建/变更操作均返回 `job_id`，通过以下接口轮询（建议每 10 秒查一次）：
-
-```bash
-curl -s "https://{ENDPOINT}/v3/{PROJECT_ID}/jobs?id={job_id}" \
-  -H "X-Auth-Token: {TOKEN}"
-```
-
-`status`：`Running`（进行中）→ `Completed`（成功）/ `Failed`（失败）
+规格命名：`s6.large.2`=2C4G通用，`c3.xlarge.2`=4C8G计算型，`m3.xlarge.8`=4C32G内存型
 
 ---
 
-## 二、备份与恢复
-
-### 2.1 设置自动备份策略
-
-**触发关键词：** 开启自动备份、设置备份时间、保留几天备份
+## 三、弹性公网 IP（EIP）
 
 ```bash
-curl -s -X PUT https://{ENDPOINT}/v3/{PROJECT_ID}/instances/{instance_id}/backups/policy \
-  -H "Content-Type: application/json" \
-  -H "X-Auth-Token: {TOKEN}" \
+# 申请独享 EIP（按带宽计费，5Mbps）
+curl -s -X POST https://vpc.{REGION}.myhuaweicloud.com/v1/{PROJECT_ID}/publicips \
+  -H "Content-Type: application/json" -H "X-Auth-Token: {TOKEN}" \
   -d '{
-    "backup_policy": {
-      "keep_days": 7,
-      "start_time": "01:00-02:00",
-      "period": "1,2,3,4,5,6,7"
-    }
+    "publicip": {"type": "5_bgp"},
+    "bandwidth": {"name": "bw-app", "size": 5, "share_type": "PER", "charge_mode": "bandwidth"}
   }'
-```
+# 返回 publicip.id 和 public_ip_address
 
-`period` 为备份星期（1=周一…7=周日），`keep_days` 范围 1-732 天。
-
----
-
-### 2.2 创建手动备份
-
-**触发关键词：** 立即备份、手动备份、创建快照
-
-```bash
-curl -s -X POST https://{ENDPOINT}/v3/{PROJECT_ID}/backups \
-  -H "Content-Type: application/json" \
-  -H "X-Auth-Token: {TOKEN}" \
-  -d '{
-    "instance_id": "{instance_id}",
-    "name": "manual-backup-{YYYYMMDD}",
-    "description": "手动备份"
-  }'
-```
-
----
-
-### 2.3 查询备份列表
-
-```bash
-curl -s "https://{ENDPOINT}/v3/{PROJECT_ID}/backups?instance_id={instance_id}" \
-  -H "X-Auth-Token: {TOKEN}" | python3 -m json.tool
-```
-
-`status`：`BUILDING` / `COMPLETED` / `FAILED`
-
----
-
-### 2.4 查询可恢复时间段
-
-**PITR 前必查**，确认用户指定的时间点在可恢复范围内：
-
-```bash
-curl -s "https://{ENDPOINT}/v3/{PROJECT_ID}/instances/{instance_id}/restore-time?date=YYYY-MM-DD" \
-  -H "X-Auth-Token: {TOKEN}"
-# 返回 start_time / end_time（毫秒时间戳）
-```
-
----
-
-### 2.5 按时间点恢复（PITR）
-
-**触发关键词：** 恢复到某个时间点、回滚到昨天、PITR
-
-先将用户提供的自然语言时间转为毫秒时间戳：
-```bash
-date -d "yesterday 22:00" +%s%3N
-```
-
-再执行恢复（恢复到**新实例**，不影响原实例）：
-
-```bash
-curl -s -X POST https://{ENDPOINT}/v3/{PROJECT_ID}/instances \
-  -H "Content-Type: application/json" \
-  -H "X-Auth-Token: {TOKEN}" \
-  -d '{
-    "name": "{新实例名称}",
-    "source": {
-      "instance_id": "{source_instance_id}",
-      "type": "timestamp",
-      "restore_time": {毫秒时间戳}
-    },
-    "target": {
-      "flavor_ref": "{规格码}",
-      "volume": { "type": "ULTRAHIGH", "size": 100 },
-      "availability_zone": "{AZ}",
-      "vpc_id": "{VPC_ID}",
-      "subnet_id": "{SUBNET_ID}",
-      "security_group": { "id": "{SG_ID}" }
-    }
-  }'
-```
-
----
-
-### 2.6 按备份文件恢复
-
-```bash
-curl -s -X POST https://{ENDPOINT}/v3/{PROJECT_ID}/instances \
-  -H "Content-Type: application/json" \
-  -H "X-Auth-Token: {TOKEN}" \
-  -d '{
-    "name": "{新实例名称}",
-    "source": {
-      "instance_id": "{source_instance_id}",
-      "type": "backup",
-      "backup_id": "{backup_id}"
-    },
-    "target": {
-      "flavor_ref": "{规格码}",
-      "volume": { "type": "ULTRAHIGH", "size": 100 },
-      "availability_zone": "{AZ}",
-      "vpc_id": "{VPC_ID}",
-      "subnet_id": "{SUBNET_ID}",
-      "security_group": { "id": "{SG_ID}" }
-    }
-  }'
-```
-
----
-
-### 2.7 删除手动备份
-
-```bash
-curl -s -X DELETE https://{ENDPOINT}/v3/{PROJECT_ID}/backups/{backup_id} \
-  -H "X-Auth-Token: {TOKEN}"
-```
-
----
-
-## 三、数据库账号管理
-
-### 3.1 创建账号
-
-**触发关键词：** 创建数据库用户、新建账号、建一个只读用户
-
-**MySQL / SQL Server：**
-```bash
-curl -s -X POST https://{ENDPOINT}/v3/{PROJECT_ID}/instances/{instance_id}/db_user \
-  -H "Content-Type: application/json" \
-  -H "X-Auth-Token: {TOKEN}" \
-  -d '{
-    "name": "{账号名}",
-    "password": "{密码}",
-    "comment": "{备注}"
-  }'
-```
-
-**PostgreSQL：** 接口相同，额外支持 `"attributes": {"replication": false}` 控制复制权限。
-
-**密码规则：** 8-32 位，含大写、小写、数字、特殊字符（`!@#$%^*-_=+?,`）至少 3 类，不能含账号名。
-
----
-
-### 3.2 为账号授权数据库（MySQL）
-
-**触发关键词：** 给用户授权、让账号能访问某数据库
-
-```bash
+# 绑定 EIP 到 ECS 网卡端口
 curl -s -X POST \
-  https://{ENDPOINT}/v3/{PROJECT_ID}/instances/{instance_id}/db_user/privilege \
-  -H "Content-Type: application/json" \
-  -H "X-Auth-Token: {TOKEN}" \
-  -d '{
-    "user_name": "{账号名}",
-    "databases": [
-      { "name": "{数据库名}", "readonly": false }
-    ]
-  }'
-```
+  https://vpc.{REGION}.myhuaweicloud.com/v1/{PROJECT_ID}/publicips/{EIP_ID}/action \
+  -H "Content-Type: application/json" -H "X-Auth-Token: {TOKEN}" \
+  -d '{"publicip": {"port_id": "{PORT_ID}"}}'
+# PORT_ID = ECS 网卡的 port，从 ECS 详情的 addresses 中获取
 
-`readonly: true` 只读，`readonly: false` 读写。
-
----
-
-### 3.3 查询账号列表
-
-```bash
-curl -s "https://{ENDPOINT}/v3/{PROJECT_ID}/instances/{instance_id}/db_user/detail?page=1&limit=100" \
-  -H "X-Auth-Token: {TOKEN}" | python3 -m json.tool
-```
-
----
-
-### 3.4 重置账号密码
-
-**触发关键词：** 改密码、重置数据库用户密码
-
-```bash
+# 解绑 EIP
 curl -s -X POST \
-  https://{ENDPOINT}/v3/{PROJECT_ID}/instances/{instance_id}/db_user/resetpwd \
-  -H "Content-Type: application/json" \
-  -H "X-Auth-Token: {TOKEN}" \
-  -d '{"name": "{账号名}", "password": "{新密码}"}'
+  https://vpc.{REGION}.myhuaweicloud.com/v1/{PROJECT_ID}/publicips/{EIP_ID}/action \
+  -H "Content-Type: application/json" -H "X-Auth-Token: {TOKEN}" \
+  -d '{"publicip": {"port_id": null}}'
 ```
 
 ---
 
-### 3.5 删除账号
+## 四、共享带宽包
 
 ```bash
-curl -s -X DELETE \
-  https://{ENDPOINT}/v3/{PROJECT_ID}/instances/{instance_id}/db_user/{user_name} \
-  -H "X-Auth-Token: {TOKEN}"
+# 创建共享带宽
+curl -s -X POST https://vpc.{REGION}.myhuaweicloud.com/v2.0/{PROJECT_ID}/bandwidths \
+  -H "Content-Type: application/json" -H "X-Auth-Token: {TOKEN}" \
+  -d '{"bandwidth": {"name": "shared-bw-prod", "size": 50}}'
+# 返回 bandwidth.id
+
+# 将 EIP 加入共享带宽
+curl -s -X POST \
+  https://vpc.{REGION}.myhuaweicloud.com/v2.0/{PROJECT_ID}/bandwidths/{BW_ID}/insert \
+  -H "Content-Type: application/json" -H "X-Auth-Token: {TOKEN}" \
+  -d '{"bandwidth": {"publicip_info": [{"publicip_id": "{EIP_ID}", "publicip_type": "5_bgp"}]}}'
+
+# 从共享带宽移除 EIP（移除后需指定该 EIP 新的独享带宽大小）
+curl -s -X POST \
+  https://vpc.{REGION}.myhuaweicloud.com/v2.0/{PROJECT_ID}/bandwidths/{BW_ID}/remove \
+  -H "Content-Type: application/json" -H "X-Auth-Token: {TOKEN}" \
+  -d '{"bandwidth": {"publicip_info": [{"publicip_id": "{EIP_ID}", "publicip_type": "5_bgp"}], "size": 5, "charge_mode": "bandwidth"}}'
 ```
 
 ---
 
-## 四、参数管理
+## 五、OBS 上传私有镜像/制品
 
-### 4.1 查询实例参数
-
-**触发关键词：** 查看参数、max_connections 现在是多少
+OBS 使用 AK/SK 签名，不用 IAM Token。需要先在控制台创建访问密钥（AK/SK）。
 
 ```bash
-curl -s "https://{ENDPOINT}/v3/{PROJECT_ID}/instances/{instance_id}/configurations" \
-  -H "X-Auth-Token: {TOKEN}" | python3 -m json.tool
+# 创建 Bucket（仅第一次）
+curl -s -X PUT https://{BUCKET_NAME}.obs.{REGION}.myhuaweicloud.com \
+  -H "Authorization: OBS {AK}:{SIGNATURE}" \
+  -H "Date: {GMT_DATE}" \
+  -H "x-obs-acl: private"
+
+# 上传文件（PUT Object）
+curl -s -X PUT \
+  https://{BUCKET_NAME}.obs.{REGION}.myhuaweicloud.com/{OBJECT_KEY} \
+  -H "Authorization: OBS {AK}:{SIGNATURE}" \
+  -H "Date: {GMT_DATE}" \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary @/path/to/your/image.tar.gz
+```
+
+**实际推荐用法**：用华为云官方 `obsutil` CLI 工具，避免手动计算签名：
+```bash
+# 安装 obsutil
+wget https://obs-community.obs.cn-north-1.myhuaweicloud.com/obsutil/current/linux_amd64/obsutil_linux_amd64.tar.gz
+tar -xzf obsutil_linux_amd64.tar.gz && chmod +x obsutil
+
+# 配置 AK/SK
+./obsutil config -i={AK} -k={SK} -e=obs.{REGION}.myhuaweicloud.com
+
+# 上传
+./obsutil cp /local/image.tar.gz obs://{BUCKET_NAME}/images/image.tar.gz
 ```
 
 ---
 
-### 4.2 修改实例参数
+## 六、ECS ↔ RDS 连接
 
-**触发关键词：** 修改参数、把 max_connections 改成 500、调整慢查询时间
+1. **安全组打通**：在 RDS 实例的安全组中，添加入方向规则，`remote_group_id` 设为 ECS 所在安全组 ID，端口为数据库端口（MySQL:3306，PG:5432）。
+2. **获取 RDS 内网 IP**：从 RDS 实例详情 `private_ips` 字段获取，仅同 VPC 内可达。
+3. **连接字符串**：
+   - MySQL：`mysql -h {RDS_PRIVATE_IP} -P 3306 -u {DB_USER} -p {DB_NAME}`
+   - PG：`psql -h {RDS_PRIVATE_IP} -p 5432 -U {DB_USER} -d {DB_NAME}`
+   - 应用配置：`jdbc:mysql://{RDS_PRIVATE_IP}:3306/{DB_NAME}?useSSL=true`
+
+**注意**：ECS 和 RDS 必须在同一 VPC 内；跨 VPC 需配置对等连接。
+
+---
+
+## 七、ELB 负载均衡（多节点）
+
+完整步骤：创建 LB → 创建监听器 → 创建后端服务器组 → 添加 ECS 成员 → 配置健康检查 → 绑 EIP
 
 ```bash
-curl -s -X PUT https://{ENDPOINT}/v3/{PROJECT_ID}/instances/{instance_id}/configurations \
-  -H "Content-Type: application/json" \
-  -H "X-Auth-Token: {TOKEN}" \
+# 步骤1：创建负载均衡器
+curl -s -X POST https://elb.{REGION}.myhuaweicloud.com/v3/{PROJECT_ID}/elb/loadbalancers \
+  -H "Content-Type: application/json" -H "X-Auth-Token: {TOKEN}" \
   -d '{
-    "values": {
-      "max_connections": "500",
-      "long_query_time": "1"
+    "loadbalancer": {
+      "name": "lb-prod", "vpc_id": "{VPC_ID}",
+      "vip_subnet_cidr_id": "{SUBNET_ID}",
+      "availability_zone_list": ["{AZ}"],
+      "guaranteed": false
     }
   }'
+# guaranteed=false 为共享型（免费额度），true 为独享型（需指定 l4_flavor_id 或 l7_flavor_id）
+# 返回 loadbalancer.id
+
+# 步骤2：创建监听器
+curl -s -X POST https://elb.{REGION}.myhuaweicloud.com/v3/{PROJECT_ID}/elb/listeners \
+  -H "Content-Type: application/json" -H "X-Auth-Token: {TOKEN}" \
+  -d '{
+    "listener": {
+      "name": "listener-http-80", "loadbalancer_id": "{LB_ID}",
+      "protocol": "HTTP", "protocol_port": 80
+    }
+  }'
+# protocol 可选: TCP / UDP / HTTP / HTTPS / TERMINATED_HTTPS
+# 返回 listener.id
+
+# 步骤3：创建后端服务器组
+curl -s -X POST https://elb.{REGION}.myhuaweicloud.com/v3/{PROJECT_ID}/elb/pools \
+  -H "Content-Type: application/json" -H "X-Auth-Token: {TOKEN}" \
+  -d '{
+    "pool": {
+      "name": "pool-app", "protocol": "HTTP",
+      "lb_algorithm": "ROUND_ROBIN", "listener_id": "{LISTENER_ID}"
+    }
+  }'
+# lb_algorithm: ROUND_ROBIN / LEAST_CONNECTIONS / SOURCE_IP
+# 返回 pool.id
+
+# 步骤4：添加 ECS 节点为后端服务器
+curl -s -X POST https://elb.{REGION}.myhuaweicloud.com/v3/{PROJECT_ID}/elb/pools/{POOL_ID}/members \
+  -H "Content-Type: application/json" -H "X-Auth-Token: {TOKEN}" \
+  -d '{
+    "member": {
+      "name": "member-ecs-01", "address": "{ECS_PRIVATE_IP}",
+      "protocol_port": 8080, "subnet_cidr_id": "{SUBNET_ID}",
+      "weight": 1
+    }
+  }'
+# address = ECS 内网 IP，protocol_port = 应用实际监听端口（非 LB 端口）
+
+# 步骤5：配置健康检查
+curl -s -X POST https://elb.{REGION}.myhuaweicloud.com/v3/{PROJECT_ID}/elb/healthmonitors \
+  -H "Content-Type: application/json" -H "X-Auth-Token: {TOKEN}" \
+  -d '{
+    "healthmonitor": {
+      "pool_id": "{POOL_ID}", "type": "HTTP",
+      "monitor_port": 8080, "url_path": "/health",
+      "delay": 5, "timeout": 3, "max_retries": 3
+    }
+  }'
+# type: TCP / HTTP / HTTPS; url_path 仅 HTTP/HTTPS 有效
+
+# 步骤6：将 EIP 绑定到 ELB（通过更新 LB 的 vip_address 关联的 port 来绑 EIP）
+# 先查 LB 的 vip_port_id，再绑 EIP
+curl -s "https://elb.{REGION}.myhuaweicloud.com/v3/{PROJECT_ID}/elb/loadbalancers/{LB_ID}" \
+  -H "X-Auth-Token: {TOKEN}"
+# 取 loadbalancer.vip_port_id，然后用 EIP 绑定接口绑到此 port_id
 ```
-
-**MySQL 常用参数速查：**
-
-| 参数名 | 说明 | 推荐值 |
-|--------|------|--------|
-| `max_connections` | 最大连接数 | 按实例内存：1G→150，4G→500，8G→800 |
-| `long_query_time` | 慢查询阈值（秒） | 生产环境建议 1-2 |
-| `innodb_buffer_pool_size` | InnoDB 缓冲池（字节） | 建议为可用内存的 70% |
-| `character_set_server` | 服务器字符集 | `utf8mb4` |
-| `time_zone` | 时区 | `+08:00` |
-| `max_allowed_packet` | 最大包大小（字节） | `67108864`（64MB） |
-
-响应中 `restart_required: true` 表示该参数需重启实例才生效，需提醒用户。
 
 ---
 
-## 五、日志查询
-
-### 5.1 查询慢日志
-
-**触发关键词：** 慢 SQL、慢查询、性能问题、执行慢的语句
+## 八、RDS 数据库
 
 ```bash
-curl -s "https://{ENDPOINT}/v3/{PROJECT_ID}/instances/{instance_id}/slowlog?\
-start_date=2024-01-01T00:00:00%2B0800\
-&end_date=2024-01-02T00:00:00%2B0800\
-&offset=1&limit=20&type=SELECT" \
-  -H "X-Auth-Token: {TOKEN}" | python3 -m json.tool
+# 创建 MySQL 8.0 主备实例
+curl -s -X POST https://rds.{REGION}.myhuaweicloud.com/v3/{PROJECT_ID}/instances \
+  -H "Content-Type: application/json" -H "X-Auth-Token: {TOKEN}" \
+  -d '{
+    "name": "rds-prod", "datastore": {"type": "MySQL", "version": "8.0"},
+    "ha": {"mode": "Ha", "replication_mode": "semisync"},
+    "password": "{ADMIN_PASSWORD}", "flavor_ref": "rds.mysql.c2.large.ha",
+    "volume": {"type": "ULTRAHIGH", "size": 100},
+    "region": "{REGION}", "availability_zone": "{AZ1},{AZ2}",
+    "vpc_id": "{VPC_ID}", "subnet_id": "{SUBNET_ID}",
+    "security_group": {"id": "{RDS_SG_ID}"}
+  }'
+
+# 其他常用操作（均为 /v3/{PROJECT_ID}/...）：
+# 查询实例列表：GET /instances
+# 创建手动备份：POST /backups
+# PITR 恢复：POST /instances（source.type=timestamp）
+# 创建账号：POST /instances/{id}/db_user
+# 查询慢日志：GET /instances/{id}/slowlog
+# 修改参数：PUT /instances/{id}/configurations
 ```
 
-参数：
-- `start_date` / `end_date`：`yyyy-MM-ddTHH:mm:ss+0800`（`+` 需 URL 编码为 `%2B`）
-- `type`：`SELECT` / `INSERT` / `UPDATE` / `DELETE` / `CREATE`（不填返回全部）
-- 时间范围最长 **30 天**，超出需分段查询
-
-**关键响应字段解读：**
-
-| 字段 | 含义 | 异常判断 |
-|------|------|---------|
-| `time` | 执行耗时 | > 1s 需关注 |
-| `rows_examined` | 扫描行数 | 远大于 `rows_sent` 说明缺索引 |
-| `lock_time` | 锁等待时间 | > 0.1s 说明有锁竞争 |
-| `count` | 统计周期内执行次数 | 高频慢 SQL 优先优化 |
+详见 `references/rds-api.md`。
 
 ---
 
-### 5.2 查询错误日志
+## 九、完整端到端场景：3节点 Web 应用 + MySQL 从零部署
 
-**触发关键词：** 错误日志、数据库有没有报错、查异常
+**目标架构**：
+```
+Internet → EIP → ELB(HTTP:80) → app-01(8080)
+                              → app-02(8080)  → RDS MySQL 8.0（主备）
+                              → app-03(8080)
+```
+
+所有操作均依赖 TOKEN、REGION、PROJECT_ID，假设 VPC 和子网已存在。
+
+### 阶段一：安全组
 
 ```bash
-curl -s "https://{ENDPOINT}/v3/{PROJECT_ID}/instances/{instance_id}/errorlog?\
-start_date=2024-01-01T00:00:00%2B0800\
-&end_date=2024-01-02T00:00:00%2B0800\
-&offset=1&limit=20&level=WARNING" \
-  -H "X-Auth-Token: {TOKEN}" | python3 -m json.tool
+# 1a. 创建 Web 层安全组（给 ECS 用）
+SG_WEB=$(curl -s -X POST https://vpc.${REGION}.myhuaweicloud.com/v2.0/security-groups \
+  -H "Content-Type: application/json" -H "X-Auth-Token: ${TOKEN}" \
+  -d '{"security_group":{"name":"sg-web","description":"Web ECS"}}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['security_group']['id'])")
+
+# 1b. 创建 DB 层安全组（给 RDS 用）
+SG_DB=$(curl -s -X POST https://vpc.${REGION}.myhuaweicloud.com/v2.0/security-groups \
+  -H "Content-Type: application/json" -H "X-Auth-Token: ${TOKEN}" \
+  -d '{"security_group":{"name":"sg-db","description":"RDS MySQL"}}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['security_group']['id'])")
+
+# 1c. sg-web 开放：SSH(22)、应用端口(8080)、ELB健康检查(8080 from 100.125.0.0/16)
+for PORT in 22 8080; do
+  curl -s -X POST https://vpc.${REGION}.myhuaweicloud.com/v2.0/security-group-rules \
+    -H "Content-Type: application/json" -H "X-Auth-Token: ${TOKEN}" \
+    -d "{\"security_group_rule\":{\"security_group_id\":\"${SG_WEB}\",\"direction\":\"ingress\",
+         \"protocol\":\"tcp\",\"port_range_min\":${PORT},\"port_range_max\":${PORT},
+         \"remote_ip_prefix\":\"0.0.0.0/0\"}}"
+done
+
+# 1d. sg-db 开放：仅允许 sg-web 访问 MySQL 3306（安全组互通）
+curl -s -X POST https://vpc.${REGION}.myhuaweicloud.com/v2.0/security-group-rules \
+  -H "Content-Type: application/json" -H "X-Auth-Token: ${TOKEN}" \
+  -d "{\"security_group_rule\":{\"security_group_id\":\"${SG_DB}\",\"direction\":\"ingress\",
+       \"protocol\":\"tcp\",\"port_range_min\":3306,\"port_range_max\":3306,
+       \"remote_group_id\":\"${SG_WEB}\"}}"
 ```
 
-`level`：`ALL` / `INFO` / `WARNING` / `ERROR` / `FATAL`
-
----
-
-## 六、安全配置
-
-### 6.1 开启/关闭 SSL
+### 阶段二：创建 3 台 ECS
 
 ```bash
-curl -s -X PUT https://{ENDPOINT}/v3/{PROJECT_ID}/instances/{instance_id}/ssl \
-  -H "Content-Type: application/json" \
-  -H "X-Auth-Token: {TOKEN}" \
-  -d '{"ssl_enable": true}'
+# 循环创建 app-01 / app-02 / app-03
+for i in 01 02 03; do
+  JOB=$(curl -s -X POST https://ecs.${REGION}.myhuaweicloud.com/v1/${PROJECT_ID}/cloudservers \
+    -H "Content-Type: application/json" -H "X-Auth-Token: ${TOKEN}" \
+    -d "{
+      \"server\": {
+        \"name\": \"app-${i}\", \"imageRef\": \"${IMAGE_ID}\",
+        \"flavorRef\": \"s6.large.2\",
+        \"availability_zone\": \"${AZ}\", \"vpcid\": \"${VPC_ID}\",
+        \"nics\": [{\"subnet_id\": \"${SUBNET_ID}\"}],
+        \"security_groups\": [{\"id\": \"${SG_WEB}\"}],
+        \"root_volume\": {\"volumetype\": \"SSD\", \"size\": 50},
+        \"adminPass\": \"${PASSWORD}\"
+      }
+    }" | python3 -c "import sys,json; print(json.load(sys.stdin)['job_id'])")
+  echo "app-${i} job_id=${JOB}"
+  # 轮询直到 SUCCESS
+  while true; do
+    STATUS=$(curl -s "https://ecs.${REGION}.myhuaweicloud.com/v1/${PROJECT_ID}/jobs/${JOB}" \
+      -H "X-Auth-Token: ${TOKEN}" | python3 -c "import sys,json; print(json.load(sys.stdin)['status'])")
+    [ "$STATUS" = "SUCCESS" ] && break
+    echo "  waiting... $STATUS"; sleep 10
+  done
+done
 ```
 
----
-
-### 6.2 修改实例端口
+### 阶段三：申请 EIP + 共享带宽
 
 ```bash
-curl -s -X PUT https://{ENDPOINT}/v3/{PROJECT_ID}/instances/{instance_id}/port \
-  -H "Content-Type: application/json" \
-  -H "X-Auth-Token: {TOKEN}" \
-  -d '{"port": 3307}'
+# 3a. 创建共享带宽（50Mbps，多 EIP 共享）
+BW_ID=$(curl -s -X POST https://vpc.${REGION}.myhuaweicloud.com/v2.0/${PROJECT_ID}/bandwidths \
+  -H "Content-Type: application/json" -H "X-Auth-Token: ${TOKEN}" \
+  -d '{"bandwidth":{"name":"shared-bw-prod","size":50}}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['bandwidth']['id'])")
+
+# 3b. 申请 EIP（后续绑到 ELB，先用独享）
+EIP_ID=$(curl -s -X POST https://vpc.${REGION}.myhuaweicloud.com/v1/${PROJECT_ID}/publicips \
+  -H "Content-Type: application/json" -H "X-Auth-Token: ${TOKEN}" \
+  -d '{"publicip":{"type":"5_bgp"},"bandwidth":{"name":"bw-elb","size":50,"share_type":"PER","charge_mode":"bandwidth"}}' \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['publicip']['id'])")
+```
+
+### 阶段四：创建 RDS MySQL 主备实例
+
+```bash
+RDS_JOB=$(curl -s -X POST https://rds.${REGION}.myhuaweicloud.com/v3/${PROJECT_ID}/instances \
+  -H "Content-Type: application/json" -H "X-Auth-Token: ${TOKEN}" \
+  -d "{
+    \"name\": \"rds-prod\",
+    \"datastore\": {\"type\": \"MySQL\", \"version\": \"8.0\"},
+    \"ha\": {\"mode\": \"Ha\", \"replication_mode\": \"semisync\"},
+    \"password\": \"${DB_ADMIN_PASS}\",
+    \"flavor_ref\": \"rds.mysql.c2.large.ha\",
+    \"volume\": {\"type\": \"ULTRAHIGH\", \"size\": 100},
+    \"region\": \"${REGION}\",
+    \"availability_zone\": \"${AZ1},${AZ2}\",
+    \"vpc_id\": \"${VPC_ID}\",
+    \"subnet_id\": \"${SUBNET_ID}\",
+    \"security_group\": {\"id\": \"${SG_DB}\"}
+  }" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['instance']['id'])")
+echo "RDS instance_id=${RDS_JOB}"
+
+# 等待 RDS 状态变为 available（轮询约5-10分钟）
+while true; do
+  S=$(curl -s "https://rds.${REGION}.myhuaweicloud.com/v3/${PROJECT_ID}/instances/${RDS_JOB}" \
+    -H "X-Auth-Token: ${TOKEN}" | python3 -c "import sys,json; print(json.load(sys.stdin)['instance']['status'])")
+  [ "$S" = "available" ] && break
+  echo "  RDS status=$S, waiting..."; sleep 30
+done
+
+# 创建业务账号
+curl -s -X POST https://rds.${REGION}.myhuaweicloud.com/v3/${PROJECT_ID}/instances/${RDS_JOB}/db_user \
+  -H "Content-Type: application/json" -H "X-Auth-Token: ${TOKEN}" \
+  -d "{\"name\":\"appuser\",\"password\":\"${DB_USER_PASS}\",
+       \"databases\":[{\"name\":\"appdb\",\"readonly\":false}]}"
+```
+
+### 阶段五：ELB 配置（全流程）
+
+```bash
+# 5a. 创建负载均衡器
+LB_ID=$(curl -s -X POST https://elb.${REGION}.myhuaweicloud.com/v3/${PROJECT_ID}/elb/loadbalancers \
+  -H "Content-Type: application/json" -H "X-Auth-Token: ${TOKEN}" \
+  -d "{\"loadbalancer\":{\"name\":\"lb-prod\",\"vpc_id\":\"${VPC_ID}\",
+       \"vip_subnet_cidr_id\":\"${SUBNET_ID}\",
+       \"availability_zone_list\":[\"${AZ1}\"],\"guaranteed\":false}}" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['loadbalancer']['id'])")
+
+# 5b. 创建 HTTP 监听器（80）
+LISTENER_ID=$(curl -s -X POST https://elb.${REGION}.myhuaweicloud.com/v3/${PROJECT_ID}/elb/listeners \
+  -H "Content-Type: application/json" -H "X-Auth-Token: ${TOKEN}" \
+  -d "{\"listener\":{\"name\":\"listener-http-80\",\"loadbalancer_id\":\"${LB_ID}\",
+       \"protocol\":\"HTTP\",\"protocol_port\":80}}" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['listener']['id'])")
+
+# 5c. 创建后端服务器组（轮询）
+POOL_ID=$(curl -s -X POST https://elb.${REGION}.myhuaweicloud.com/v3/${PROJECT_ID}/elb/pools \
+  -H "Content-Type: application/json" -H "X-Auth-Token: ${TOKEN}" \
+  -d "{\"pool\":{\"name\":\"pool-app\",\"protocol\":\"HTTP\",
+       \"lb_algorithm\":\"ROUND_ROBIN\",\"listener_id\":\"${LISTENER_ID}\"}}" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['pool']['id'])")
+
+# 5d. 将 3 台 ECS 加入后端（替换 ECS_IP_01/02/03 为实际内网 IP）
+for ECS_IP in ${ECS_IP_01} ${ECS_IP_02} ${ECS_IP_03}; do
+  curl -s -X POST https://elb.${REGION}.myhuaweicloud.com/v3/${PROJECT_ID}/elb/pools/${POOL_ID}/members \
+    -H "Content-Type: application/json" -H "X-Auth-Token: ${TOKEN}" \
+    -d "{\"member\":{\"address\":\"${ECS_IP}\",\"protocol_port\":8080,
+         \"subnet_cidr_id\":\"${SUBNET_ID}\",\"weight\":1}}"
+done
+
+# 5e. 配置健康检查（HTTP GET /health）
+curl -s -X POST https://elb.${REGION}.myhuaweicloud.com/v3/${PROJECT_ID}/elb/healthmonitors \
+  -H "Content-Type: application/json" -H "X-Auth-Token: ${TOKEN}" \
+  -d "{\"healthmonitor\":{\"pool_id\":\"${POOL_ID}\",\"type\":\"HTTP\",
+       \"monitor_port\":8080,\"url_path\":\"/health\",
+       \"delay\":5,\"timeout\":3,\"max_retries\":3}}"
+
+# 5f. 获取 ELB VIP 的 port_id，然后将 EIP 绑上去
+VIP_PORT=$(curl -s "https://elb.${REGION}.myhuaweicloud.com/v3/${PROJECT_ID}/elb/loadbalancers/${LB_ID}" \
+  -H "X-Auth-Token: ${TOKEN}" \
+  | python3 -c "import sys,json; print(json.load(sys.stdin)['loadbalancer']['vip_port_id'])")
+
+curl -s -X PUT https://vpc.${REGION}.myhuaweicloud.com/v1/${PROJECT_ID}/publicips/${EIP_ID} \
+  -H "Content-Type: application/json" -H "X-Auth-Token: ${TOKEN}" \
+  -d "{\"publicip\":{\"port_id\":\"${VIP_PORT}\"}}"
+```
+
+### 阶段六：部署应用 + 配置数据库连接
+
+```bash
+# 在每台 ECS 上执行（以 app-01 为例，通过 SSH）
+ssh root@${ECS_IP_01} << 'EOF'
+# 从 OBS 下载应用包
+./obsutil cp obs://my-bucket/releases/app-v1.0.tar.gz /opt/app/ -i=${AK} -k=${SK}
+
+# 解压部署
+tar -xzf /opt/app/app-v1.0.tar.gz -C /opt/app/
+cat > /opt/app/config.env << CONF
+DB_HOST=${RDS_PRIVATE_IP}
+DB_PORT=3306
+DB_NAME=appdb
+DB_USER=appuser
+DB_PASS=${DB_USER_PASS}
+APP_PORT=8080
+CONF
+
+# 启动（示例：Java 应用）
+nohup java -jar /opt/app/app.jar --spring.config.location=/opt/app/config.env > /var/log/app.log 2>&1 &
+echo "App started, PID=$!"
+EOF
+```
+
+### 验证清单
+
+```bash
+# 1. 检查 ELB 后端节点健康状态（期望 ONLINE）
+curl -s "https://elb.${REGION}.myhuaweicloud.com/v3/${PROJECT_ID}/elb/pools/${POOL_ID}/members" \
+  -H "X-Auth-Token: ${TOKEN}" | python3 -c \
+  "import sys,json; [print(m['address'], m['operating_status']) for m in json.load(sys.stdin)['members']]"
+
+# 2. 通过 EIP 访问应用
+curl -I http://${EIP_ADDRESS}/health
+# 期望: HTTP/1.1 200 OK
+
+# 3. 检查 RDS 可连接性（在 ECS 上执行）
+mysql -h ${RDS_PRIVATE_IP} -P 3306 -u appuser -p${DB_USER_PASS} appdb -e "SELECT 1;"
 ```
 
 ---
 
-## 七、行为准则
+## Common Pitfalls
 
-### 执行前
+1. **上下文过载导致工具调用参数截断**：本 Skill 的文档收集涉及多个并行 web 请求，消耗大量上下文。收集完文档后，若继续在同一会话中写大文件（SKILL.md、README 等），工具调用的 `content` 参数会被静默截断，导致写入失败。**解决方案**：用 `delegate_task` 将"写文件 + git push"委托给子 Agent，隔离上下文。子 Agent 超时（600s）时，改为手动分段写入。
 
-1. **确认必要参数**：TOKEN、PROJECT_ID、ENDPOINT 缺一不可，缺少时主动向用户询问
-2. **高危操作二次确认**：删除实例、覆盖恢复、重启 —— 报出实例名称，明确告知影响，等用户确认
-3. **PITR 前先查时间段**：恢复时间点必须在可恢复范围内，不要直接猜测
+2. **EIP 绑定需要 port_id 而非 server_id**：绑定 EIP 时需提供 ECS 网卡的 `port_id`，不是 server ID。从 ECS 详情的 `addresses` 字段中取 `OS-EXT-IPS:port_id`。
 
-### 执行中
+3. **ELB 后端服务器地址是 ECS 内网 IP，端口是应用端口**：`member.address` 填 ECS 内网 IP，`protocol_port` 填应用实际监听端口（如 8080），不是 LB 监听端口（80）。
 
-4. **创建/变更操作轮询 job_id**：不要只返回"已提交"，要持续查询直到完成或失败
-5. **时间转换要准确**：用户说"昨天下午3点"时，用 `date` 命令转成毫秒时间戳，不要手算
+4. **共享带宽移除 EIP 时需指定新独享带宽大小**：移除时 `size` 和 `charge_mode` 是必填项，指定该 EIP 离开共享带宽后的独享配置。
 
-### 执行后
+5. **OBS 不用 IAM Token**：OBS 使用 AK/SK 签名（HMAC-SHA1），与其他服务的 Token 认证不同。强烈推荐用 `obsutil` CLI 而非手写签名。
 
-6. **返回关键结果**：实例 ID、内网 IP、端口、状态，让用户直接可用
-7. **错误要解释**：API 返回 4xx/5xx 时，解释原因并给出修复建议（如 401→Token 过期，需重新获取）
+6. **ECS 创建返回 job_id 而非直接返回 server_id**：必须轮询 `GET /v1/{PROJECT_ID}/jobs/{JOB_ID}` 直到 `status=SUCCESS`，再从 `entities.server_id` 取 ID。
 
-### 常见错误处理
+7. **RDS 和 ECS 必须在同一 VPC**：跨 VPC 访问 RDS 需先建 VPC 对等连接，不是直接连。
 
-| HTTP 状态码 | 常见原因 | 处理方式 |
-|------------|---------|---------|
-| `401` | Token 过期 | 重新获取 IAM Token |
-| `400` | 参数格式错误 | 检查参数值（时间格式、AZ 格式等） |
-| `403` | 权限不足 | 检查 IAM 用户是否有 RDS 操作权限 |
-| `404` | 实例/备份 ID 不存在 | 先查询列表确认 ID |
-| `409` | 实例名称重复或实例状态不允许此操作 | 等实例变为 ACTIVE 后重试 |
+8. **ELB 绑 EIP 通过 vip_port_id**：ELB 不直接提供"绑 EIP"接口，需先查 LB 详情取 `vip_port_id`，再用 EIP 绑定接口把该 port 绑上去。
 
----
+## Verification Checklist
 
-## 八、典型场景示例
-
-### 场景 A：从零创建生产级 MySQL 实例
-
-```
-用户：帮我在华北四区创建一个 MySQL 8.0 主备实例，4核8G，100G SSD
-
-Agent 步骤：
-1. 确认用户有 TOKEN / PROJECT_ID，没有则引导获取
-2. 查询规格 → 找到 4核8G MySQL 8.0 主备的 flavor_ref
-3. 向用户确认 VPC/子网/安全组（或列出可用项让用户选）
-4. 确认实例名称和管理员密码（提示密码规则）
-5. 执行创建 API，拿到 job_id
-6. 每 15 秒轮询 job 状态，完成后查询实例详情
-7. 返回：实例 ID、内网 IP、端口、连接命令示例
-```
-
-### 场景 B：数据误删恢复
-
-```
-用户：我们的 orders 表数据被误删了，发生在今天下午2点半，帮我恢复
-
-Agent 步骤：
-1. 确认实例 ID
-2. 查询可恢复时间段，确认今天14:30在范围内
-3. 告知用户：将恢复到新实例（不覆盖现有实例），让用户确认新实例规格和名称
-4. 将"今天14:30"转为毫秒时间戳
-5. 执行 PITR 恢复，轮询直到完成
-6. 返回新实例连接信息，提醒用户从新实例导出 orders 表后再导入生产库
-```
-
-### 场景 C：性能问题排查
-
-```
-用户：我们的数据库最近很慢，帮我查一下
-
-Agent 步骤：
-1. 确认实例 ID 和时间范围
-2. 查询最近 24 小时慢日志（不指定 type，返回全部）
-3. 按 time 降序整理，列出 Top 5 慢 SQL
-4. 分析 rows_examined vs rows_sent 比值，判断索引问题
-5. 查询当前 long_query_time 参数值
-6. 给出优化建议：索引建议、参数调整建议
-```
+- [ ] TOKEN 已获取且未过期（24h 有效）
+- [ ] ECS、RDS 在同一 VPC 和同一区域
+- [ ] RDS 安全组的入方向包含 ECS 安全组 ID（不是 CIDR）
+- [ ] ELB member 的 `address` = ECS 内网 IP，`protocol_port` = 应用端口
+- [ ] ECS 创建后通过 job_id 轮询确认 SUCCESS 再取 server_id
+- [ ] OBS 上传使用 AK/SK，不是 IAM Token
+- [ ] EIP 绑定使用 port_id，不是 server_id
