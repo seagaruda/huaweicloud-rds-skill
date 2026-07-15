@@ -1,20 +1,43 @@
-# 华为云 RDS 技能实战
+# huaweicloud-rds-skill
 
-本仓库收录华为云云数据库 RDS（Relational Database Service）的技能实战示例，帮助开发者快速上手 RDS 常见操作。
+华为云 RDS（云数据库）Agent Skill，让 AI Agent 通过自然语言完成 RDS 全生命周期管理。
 
-## 目录
+## 什么是 Agent Skill？
 
-| 示例 | 说明 |
-|------|------|
-| [示例1：创建 RDS 实例](docs/skill_0001.md) | 通过 API 创建 MySQL 主备实例 |
-| [示例2：查询实例列表](docs/skill_0002.md) | 获取账号下所有 RDS 实例信息 |
-| [示例3：备份与恢复](docs/skill_0003.md) | 创建手动备份并按时间点恢复（PITR）|
-| [示例4：创建数据库账号](docs/skill_0004.md) | 为 MySQL 实例创建数据库账号并授权 |
-| [示例5：查询慢日志](docs/skill_0005.md) | 查询实例慢 SQL 日志，定位性能问题 |
+这是一个面向 [Hermes Agent](https://hermes-agent.nousresearch.com) 的技能文件（SKILL.md）。当用户用自然语言发出数据库相关指令时，Agent 自动加载本 Skill，获取 API 调用方式、参数格式、注意事项，从而完成操作。
 
-## 说明
+**无需手写代码，无需查文档** —— 直接对 Agent 说：
+- "帮我在华北四区创建一个 MySQL 8.0 主备实例，4核8G"
+- "把生产库恢复到昨天晚上10点"
+- "查一下最近有哪些慢 SQL"
+- "给 app_user 授权访问 myapp_db"
 
-- 所有示例均使用 RDS v3 API（推荐版本）
-- 认证方式：Token 或 AK/SK 签名
-- 官方文档：https://support.huaweicloud.com/rds/index.html
-- API 参考：https://support.huaweicloud.com/api-rds/rds_01_0001.html
+## 覆盖操作
+
+| 模块 | 支持的操作 |
+|------|-----------|
+| 实例管理 | 创建、查询列表、查询详情、重启、变更规格、扩容磁盘、删除 |
+| 备份恢复 | 设置自动备份策略、创建手动备份、查询备份、PITR 恢复、按备份恢复、删除备份 |
+| 账号管理 | 创建账号、授权/撤权、查询账号、重置密码、删除账号 |
+| 参数管理 | 查询参数、修改参数 |
+| 日志查询 | 慢日志查询、错误日志查询 |
+| 安全配置 | SSL 开关、端口修改 |
+
+支持引擎：**MySQL**、**PostgreSQL**、**SQL Server**
+
+## 使用方式
+
+将 `SKILL.md` 放入 Hermes Agent 的 skills 目录：
+
+```bash
+mkdir -p ~/.hermes/skills/cloud/huaweicloud-rds
+cp SKILL.md ~/.hermes/skills/cloud/huaweicloud-rds/
+```
+
+然后在 Agent 对话中直接用自然语言描述 RDS 操作即可。
+
+## 官方文档
+
+- [RDS 产品介绍](https://support.huaweicloud.com/productdesc-rds/rds_01_0001.html)
+- [RDS API 参考](https://support.huaweicloud.com/api-rds/rds_01_0001.html)
+- [RDS 快速入门](https://support.huaweicloud.com/qs-rds/rds_02_0008.html)
