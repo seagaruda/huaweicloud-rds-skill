@@ -1,6 +1,6 @@
-# 华为云 RDS Agent Skill
+# 华为云 Agent Skill
 
-一个面向所有 AI 平台的华为云 RDS 操作技能文件，让任何 AI Agent 通过自然语言完成 RDS 数据库的全生命周期管理。
+一个面向所有 AI 平台的华为云 操作Skill文件，让任何 AI Agent 通过自然语言完成 华为云的全生命周期管理。
 
 ## 支持的 AI 平台
 
