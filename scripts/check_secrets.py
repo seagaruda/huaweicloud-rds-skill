@@ -24,9 +24,18 @@ def check_secrets():
         with open(filepath, "r", encoding="utf-8") as f:
             for line_num, line in enumerate(f, 1):
                 for pattern, msg in patterns:
-                    if re.search(pattern, line):
-                        # Skip if it's a placeholder like {PASSWORD} or ${PASSWORD}
-                        if '{' in line or '$' in line:
+                    m = re.search(pattern, line)
+                    if m:
+                        # Skip if the matched value is a placeholder like
+                        # {PASSWORD} or ${PASSWORD}. We inspect the matched
+                        # string rather than the whole line, because a line
+                        # may legitimately contain both a JSON object literal
+                        # (with '{') and a hardcoded secret.
+                        matched = m.group(0)
+                        # Extract the value portion after : or =
+                        val_match = re.search(r'[:=]\s*["\']([^"\']*)["\']', matched)
+                        val = val_match.group(1) if val_match else ""
+                        if re.match(r'^\$\{[^}]+\}$', val) or re.match(r'^\{[^}]+\}$', val):
                             continue
                         issues.append(f"  {filepath}:{line_num}: {msg}")
 

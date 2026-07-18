@@ -41,21 +41,34 @@ Create request body:
 
 ## Associate/Disassociate
 
+EIP binding uses the `/action` endpoint with a JSON body specifying the
+`port_id` to bind (or unbind). This is consistent with the EIP v1 API.
+
 | Operation | Method | Path |
 |-----------|--------|------|
-| Associate | POST | `/vpc/publicips/{publicip_id}/associate` |
-| Disassociate | POST | `/vpc/publicips/{publicip_id}/disassociate` |
+| Associate (bind) | POST | `/publicips/{publicip_id}/action` |
+| Disassociate (unbind) | POST | `/publicips/{publicip_id}/action` |
 
-Associate body:
+Associate (bind) body:
 ```json
 {
-  "associate": {
-    "port_id": "{vif_uuid}"
+  "publicip": {
+    "port_id": "{port_id}"
   }
 }
 ```
 
-> `port_id` 是 ECS 的 VIF UUID，通过 ECS 详情 API 获取 `public_ips[0].port_id`。
+Disassociate (unbind) body:
+```json
+{
+  "publicip": {
+    "port_id": ""
+  }
+}
+```
+
+> `port_id` is the ECS VIF UUID, obtained from the ECS detail API
+> (`public_ips[0].port_id`). To unbind, set `port_id` to an empty string.
 
 ## Bandwidth Management
 

@@ -1,17 +1,21 @@
 # ELB API Quick Reference
 
-Base: `https://elb.{REGION}.myhuaweicloud.com/v2/{PROJECT_ID}`
+Base: `https://elb.{REGION}.myhuaweicloud.com/v3/{PROJECT_ID}`
 Auth: `X-Auth-Token: {TOKEN}`
+
+> **API version note**: This reference uses **v3** (the current recommended API).
+> All resource paths are prefixed with `/elb/` under the v3 base URL.
+> (Legacy v2 paths like `/v2/{PROJECT_ID}/loadbalancers` are deprecated.)
 
 ## Load Balancer Management
 
 | Operation | Method | Path |
 |-----------|--------|------|
-| Create LB | POST | `/loadbalancers` |
-| List LBs | GET | `/loadbalancers?limit=1000` |
-| Get LB details | GET | `/loadbalancers/{loadbalancer_id}` |
-| Update LB | PUT | `/loadbalancers/{loadbalancer_id}` |
-| Delete LB | DELETE | `/loadbalancers/{loadbalancer_id}` |
+| Create LB | POST | `/elb/loadbalancers` |
+| List LBs | GET | `/elb/loadbalancers?limit=1000` |
+| Get LB details | GET | `/elb/loadbalancers/{loadbalancer_id}` |
+| Update LB | PUT | `/elb/loadbalancers/{loadbalancer_id}` |
+| Delete LB | DELETE | `/elb/loadbalancers/{loadbalancer_id}` |
 
 Create request body:
 ```json
@@ -43,11 +47,11 @@ Create request body:
 
 | Operation | Method | Path |
 |-----------|--------|------|
-| Create listener | POST | `/listeners` |
-| List listeners | GET | `/listeners?loadbalancer_id={lb_id}` |
-| Get listener details | GET | `/listeners/{listener_id}` |
-| Update listener | PUT | `/listeners/{listener_id}` |
-| Delete listener | DELETE | `/listeners/{listener_id}` |
+| Create listener | POST | `/elb/listeners` |
+| List listeners | GET | `/elb/listeners?loadbalancer_id={lb_id}` |
+| Get listener details | GET | `/elb/listeners/{listener_id}` |
+| Update listener | PUT | `/elb/listeners/{listener_id}` |
+| Delete listener | DELETE | `/elb/listeners/{listener_id}` |
 
 ### Listener Protocols
 
@@ -62,11 +66,11 @@ Create request body:
 
 | Operation | Method | Path |
 |-----------|--------|------|
-| Create pool | POST | `/pools` |
-| List pools | GET | `/pools?listener_id={listener_id}` |
-| Get pool details | GET | `/pools/{pool_id}` |
-| Update pool | PUT | `/pools/{pool_id}` |
-| Delete pool | DELETE | `/pools/{pool_id}` |
+| Create pool | POST | `/elb/pools` |
+| List pools | GET | `/elb/pools?listener_id={listener_id}` |
+| Get pool details | GET | `/elb/pools/{pool_id}` |
+| Update pool | PUT | `/elb/pools/{pool_id}` |
+| Delete pool | DELETE | `/elb/pools/{pool_id}` |
 
 ### Load Balancing Algorithms
 
@@ -80,11 +84,11 @@ Create request body:
 
 | Operation | Method | Path |
 |-----------|--------|------|
-| Add member | POST | `/pools/{pool_id}/members` |
-| List members | GET | `/pools/{pool_id}/members` |
-| Get member details | GET | `/pools/{pool_id}/members/{member_id}` |
-| Update member | PUT | `/pools/{pool_id}/members/{member_id}` |
-| Delete member | DELETE | `/pools/{pool_id}/members/{member_id}` |
+| Add member | POST | `/elb/pools/{pool_id}/members` |
+| List members | GET | `/elb/pools/{pool_id}/members` |
+| Get member details | GET | `/elb/pools/{pool_id}/members/{member_id}` |
+| Update member | PUT | `/elb/pools/{pool_id}/members/{member_id}` |
+| Delete member | DELETE | `/elb/pools/{pool_id}/members/{member_id}` |
 
 Add member body:
 ```json
@@ -103,10 +107,10 @@ Add member body:
 
 | Operation | Method | Path |
 |-----------|--------|------|
-| Create health check | POST | `/healthmonitors` |
-| List health checks | GET | `/healthmonitors?pool_id={pool_id}` |
-| Update health check | PUT | `/healthmonitors/{healthmonitor_id}` |
-| Delete health check | DELETE | `/healthmonitors/{healthmonitor_id}` |
+| Create health check | POST | `/elb/healthmonitors` |
+| List health checks | GET | `/elb/healthmonitors?pool_id={pool_id}` |
+| Update health check | PUT | `/elb/healthmonitors/{healthmonitor_id}` |
+| Delete health check | DELETE | `/elb/healthmonitors/{healthmonitor_id}` |
 
 Health check body:
 ```json
@@ -135,18 +139,18 @@ Health check body:
 
 | Operation | Method | Path |
 |-----------|--------|------|
-| Create L7 policy | POST | `/l7policies` |
-| Create L7 rule | POST | `/l7policies/{policy_id}/rules` |
-| List L7 policies | GET | `/l7policies?listener_id={listener_id}` |
+| Create L7 policy | POST | `/elb/l7policies` |
+| Create L7 rule | POST | `/elb/l7policies/{policy_id}/rules` |
+| List L7 policies | GET | `/elb/l7policies?listener_id={listener_id}` |
 
 ## Certificate Management (HTTPS)
 
 | Operation | Method | Path |
 |-----------|--------|------|
-| Upload certificate | POST | `/certificates` |
-| List certificates | GET | `/certificates` |
-| Get certificate | GET | `/certificates/{certificate_id}` |
-| Delete certificate | DELETE | `/certificates/{certificate_id}` |
+| Upload certificate | POST | `/elb/certificates` |
+| List certificates | GET | `/elb/certificates` |
+| Get certificate | GET | `/elb/certificates/{certificate_id}` |
+| Delete certificate | DELETE | `/elb/certificates/{certificate_id}` |
 
 ## Common Scenarios
 
